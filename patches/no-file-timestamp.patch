@@ -1,0 +1,101 @@
+Removes RTCFileLogger and the File Timestamp privacy-manifest entry, and
+fixes the macOS manifest path. Applies to webrtc-sdk/webrtc at ba469aa2,
+after apple_prefix.patch.
+
+Why: in the published LiveKitWebRTC framework the only stat-family import is
+_stat, reached solely through RTCFileLogger -> FileRotatingLogSink ->
+FileRotatingStream (IsFile, GetSize), found with ld -why_live,_stat on a
+stock build. stat is in Apple's File Timestamp required-reason category.
+Upstream tracks making RTCFileLogger optional as bugs.webrtc.org/337909152.
+
+1. sdk/BUILD.gn: drop RTCFileLogger (header and file_logger_objc) from both
+   framework bundles, and the unused file_logger_objc dependency of
+   peerconnectionfactory_base_objc (with -all_load it would pull the class in).
+2. tools_webrtc/apple/generate_privacy_manifest.py: drop the File Timestamp
+   (C617.1) entry, which existed only for RTCFileLogger. System Boot Time
+   (35F9.1, 8FFB.1) stays: mach_absolute_time is still used.
+3. webrtc.gni: put the manifest at {{bundle_resources_dir}}. On macOS
+   {{bundle_contents_dir}} is already Versions/A, so the old path produced
+   Versions/A/Versions/A/Resources, where Apple's tools do not look.
+
+--- a/sdk/BUILD.gn
++++ b/sdk/BUILD.gn
+@@ -1235,7 +1235,6 @@
+         ":audio_device_api_objc",
+         ":base_native_additions_objc",
+         ":base_objc",
+-        ":file_logger_objc",
+         ":helpers_objc",
+         ":mediaconstraints_objc",
+         ":mediasource_objc",
+@@ -1603,7 +1602,6 @@
+         if (!build_with_chromium) {
+           common_objc_headers += [
+             "objc/api/logging/RTCCallbackLogger.h",
+-            "objc/api/peerconnection/RTCFileLogger.h",
+           ]
+         }
+ 
+@@ -1633,7 +1631,6 @@
+         if (!build_with_chromium) {
+           deps += [
+             ":callback_logger_objc",
+-            ":file_logger_objc",
+           ]
+         }
+ 
+@@ -1782,7 +1779,6 @@
+         if (!build_with_chromium) {
+           sources += [
+             "objc/api/logging/RTCCallbackLogger.h",
+-            "objc/api/peerconnection/RTCFileLogger.h",
+           ]
+         }
+ 
+@@ -1801,7 +1797,6 @@
+         if (!build_with_chromium) {
+           deps += [
+             ":callback_logger_objc",
+-            ":file_logger_objc",
+           ]
+         }
+ 
+--- a/webrtc.gni
++++ b/webrtc.gni
+@@ -1105,12 +1105,7 @@
+     bundle_data("privacy_manifest_bundle_data_$this_target_name") {
+       deps = [ ":create_privacy_manifest_$this_target_name" ]
+       sources = get_target_outputs(":create_privacy_manifest_$this_target_name")
+-      if (is_mac || target_environment == "catalyst") {
+-        privacy_manifest_out_path = "Versions/A/Resources/PrivacyInfo.xcprivacy"
+-      } else {
+-        privacy_manifest_out_path = "PrivacyInfo.xcprivacy"
+-      }
+-      outputs = [ "{{bundle_contents_dir}}/$privacy_manifest_out_path" ]
++      outputs = [ "{{bundle_resources_dir}}/PrivacyInfo.xcprivacy" ]
+     }
+ 
+     if (is_mac) {
+--- a/tools_webrtc/apple/generate_privacy_manifest.py
++++ b/tools_webrtc/apple/generate_privacy_manifest.py
+@@ -38,20 +38,6 @@
+                     # AVFAudio frameworks.
+                     "8FFB.1",
+                 ]
+-            },
+-            # For stat usage in rtc_base/file_rotating_stream.cc
+-            # TODO: bugs.webrtc.org/337909152 - Make this optional since this
+-            # is only used for RTCFileLogger, which is not used by default and
+-            # not considered as a core feature.
+-            {
+-                "NSPrivacyAccessedAPIType":
+-                "NSPrivacyAccessedAPICategoryFileTimestamp",
+-                "NSPrivacyAccessedAPITypeReasons": [
+-                    # Declare this reason to access the timestamps, size, or
+-                    # other metadata of files inside the app container, app
+-                    # group container, or the app’s CloudKit container.
+-                    "C617.1"
+-                ]
+             }
+         ]
+     }
